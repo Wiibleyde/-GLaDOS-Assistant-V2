@@ -49,6 +49,7 @@ model GuildData {
     uuid        String  @id @default(uuid())
     guildId     String  @unique
     debugRoleId String?
+    calendarUrl String? @db.VarChar(2048)
 
     @@index([guildId])
 }
