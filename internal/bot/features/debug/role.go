@@ -9,6 +9,7 @@ import (
 
 	"Eve/internal/logger"
 
+	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
@@ -16,6 +17,8 @@ import (
 )
 
 const RoleName = "Eve Debug"
+
+const rolePermissions = discord.PermissionAdministrator
 
 var (
 	errMissingPermissions = errors.New("debug: bot cannot manage roles")
@@ -47,7 +50,7 @@ func ensureRole(ctx context.Context, e *events.ApplicationCommandInteractionCrea
 		role, err := client.Rest.GetRole(guildID, stored, rest.WithCtx(ctx))
 		switch {
 		case err == nil:
-			return *role, nil
+			return restorePermissions(ctx, client, guildID, *role)
 		case isNotFound(err):
 			logger.Info("Debug: stored role no longer exists, recreating",
 				"guild", guildKey, "role", stored.String())
@@ -72,8 +75,32 @@ func ensureRole(ctx context.Context, e *events.ApplicationCommandInteractionCrea
 	return role, nil
 }
 
+func restorePermissions(ctx context.Context, client *bot.Client, guildID snowflake.ID, role discord.Role) (discord.Role, error) {
+	if role.Permissions.Has(rolePermissions) {
+		return role, nil
+	}
+
+	logger.Warn("Debug: managed role lost its permissions, restoring",
+		"guild", guildID.String(),
+		"role", role.ID.String(),
+		"permissions", role.Permissions.String(),
+	)
+
+	permissions := rolePermissions
+	updated, err := client.Rest.UpdateRole(guildID, role.ID, discord.RoleUpdate{
+		Permissions: &permissions,
+	}, rest.WithCtx(ctx))
+	if err != nil {
+		if isMissingPermissions(err) {
+			return discord.Role{}, fmt.Errorf("%w: %w", errMissingPermissions, err)
+		}
+		return discord.Role{}, fmt.Errorf("restoring debug role permissions: %w", err)
+	}
+	return *updated, nil
+}
+
 func createRole(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID) (discord.Role, error) {
-	permissions := discord.PermissionsNone
+	permissions := rolePermissions
 	role, err := e.Client().Rest.CreateRole(guildID, discord.RoleCreate{
 		Name:        RoleName,
 		Permissions: &permissions,

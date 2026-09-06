@@ -1,7 +1,15 @@
 package debug
 
-import "Eve/internal/bot/router"
+import (
+	"Eve/internal/bot/helpers"
+	"Eve/internal/bot/router"
+	"Eve/internal/logger"
+)
 
 func Register(r *router.Router) {
+	if !helpers.OwnerConfigured() {
+		logger.Warn("BOT_OWNER_ID is missing or invalid, /debug is disabled")
+		return
+	}
 	r.OnCommand(CommandName, HandleCommand)
 }

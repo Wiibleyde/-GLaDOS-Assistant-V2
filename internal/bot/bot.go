@@ -95,7 +95,7 @@ func Run(cfg *config.Config, db *database.Client) {
 	allCommands = append(allCommands, calendar.Commands...)
 	allCommands = append(allCommands, coinflip.Commands...)
 	allCommands = append(allCommands, configfeature.Commands...)
-	allCommands = append(allCommands, debugfeature.Commands...)
+	allCommands = append(allCommands, debugfeature.Commands()...)
 	allCommands = append(allCommands, loto.Commands...)
 	allCommands = append(allCommands, maintenancefeature.Commands()...)
 	allCommands = append(allCommands, motus.Commands...)

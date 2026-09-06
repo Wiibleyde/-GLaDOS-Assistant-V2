@@ -22,17 +22,13 @@ const CommandName = "debug"
 const commandTimeout = 5 * time.Second
 
 const (
+	msgOwnerOnly = "Cette commande est réservée au propriétaire du bot."
 	msgGuildOnly = "Cette commande doit être utilisée dans un serveur."
 	msgDBError   = "Erreur lors de l'accès à la base de données."
 	msgRoleError = "Impossible de récupérer ou de créer le rôle « " + RoleName + " »."
 
-	msgMissingPerm = "Je n'ai pas la permission **Gérer les rôles**. " +
+	msgMissingPerm = "Je n'ai pas la permission **Administrateur**. " +
 		"Accordez-la moi et placez mon rôle au-dessus du rôle « " + RoleName + " » pour que je puisse vous l'attribuer."
-
-	msgEscalated = "Le rôle « " + RoleName + " » possède la permission **Administrateur** alors qu'il ne devrait avoir aucune permission. " +
-		"Par sécurité, je refuse de l'attribuer. Retirez-lui toutes ses permissions (ou supprimez-le, il sera recréé automatiquement)."
-	msgEscalatedNote = "⚠️ Ce rôle avait la permission **Administrateur** alors qu'il ne devrait avoir aucune permission : " +
-		"vérifiez qui l'a modifié avant de le réutiliser."
 
 	msgEnabledFmt      = "Vous êtes maintenant en mode debug sur le serveur %s"
 	msgDisabledFmt     = "Vous n'êtes plus en mode debug sur le serveur %s"
@@ -43,15 +39,29 @@ const (
 	msgRemoveFailed = "Impossible de vous retirer le rôle « " + RoleName + " »."
 )
 
-var Commands = []discord.ApplicationCommandCreate{
-	discord.SlashCommandCreate{
-		Name:        CommandName,
-		Description: "Activer ou désactiver le mode debug pour vous-même",
-		Contexts:    []discord.InteractionContextType{discord.InteractionContextTypeGuild},
-	},
+var command = discord.SlashCommandCreate{
+	Name:        CommandName,
+	Description: "Activer ou désactiver le mode debug pour vous-même",
+	Contexts:    []discord.InteractionContextType{discord.InteractionContextTypeGuild},
+}
+
+func Commands() []discord.ApplicationCommandCreate {
+	if !helpers.OwnerConfigured() {
+		return nil
+	}
+	return []discord.ApplicationCommandCreate{command}
 }
 
 func HandleCommand(e *events.ApplicationCommandInteractionCreate) {
+	if !helpers.IsOwner(e.User().ID) {
+		logger.Warn("Debug: refused non-owner caller",
+			"user", e.User().ID.String(),
+			"guild", guildIDString(e.GuildID()),
+		)
+		helpers.RespondEphemeralCard(e, ui.Error(msgOwnerOnly))
+		return
+	}
+
 	guildID := e.GuildID()
 	member := e.Member()
 	if guildID == nil || member == nil {
@@ -59,8 +69,8 @@ func HandleCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	if perms := e.AppPermissions(); perms != nil && perms.Missing(discord.PermissionManageRoles) {
-		logger.Debug("Debug: missing Manage Roles", "guild", guildID.String())
+	if perms := e.AppPermissions(); perms != nil && perms.Missing(discord.PermissionAdministrator) {
+		logger.Debug("Debug: missing Administrator", "guild", guildID.String())
 		helpers.RespondEphemeralCard(e, ui.Error(msgMissingPerm))
 		return
 	}
@@ -89,23 +99,8 @@ func HandleCommand(e *events.ApplicationCommandInteractionCreate) {
 		return
 	}
 
-	hasRole := slices.Contains(member.RoleIDs, role.ID)
-
-	escalated := role.Permissions.Has(discord.PermissionAdministrator)
-	if escalated {
-		logger.Warn("Debug: managed role has administrator permission",
-			"guild", guildID.String(),
-			"role", role.ID.String(),
-			"permissions", role.Permissions.String(),
-		)
-		if !hasRole {
-			editDeferred(e, ui.Error(msgEscalated))
-			return
-		}
-	}
-
-	if hasRole {
-		removeRole(ctx, e, *guildID, role.ID, escalated)
+	if slices.Contains(member.RoleIDs, role.ID) {
+		removeRole(ctx, e, *guildID, role.ID)
 		return
 	}
 	addRole(ctx, e, *guildID, role.ID)
@@ -118,24 +113,26 @@ func addRole(ctx context.Context, e *events.ApplicationCommandInteractionCreate,
 		editDeferred(e, ui.Error(toggleErrorMessage(err, msgAddFailed)))
 		return
 	}
-	logger.Info("Debug: mode enabled", "guild", guildID.String(), "user", userID.String())
+	logger.Warn("Debug: administrator role granted to owner", "guild", guildID.String(), "user", userID.String(), "role", roleID.String())
 	editDeferred(e, ui.Success(toggleMessage(ctx, e, guildID, msgEnabledFmt, msgEnabledFallback)))
 }
 
-func removeRole(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, roleID snowflake.ID, escalated bool) {
+func removeRole(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, roleID snowflake.ID) {
 	userID := e.User().ID
 	if err := e.Client().Rest.RemoveMemberRole(guildID, userID, roleID, rest.WithCtx(ctx)); err != nil {
 		logger.Error("Debug: removing role failed", "guild", guildID.String(), "user", userID.String(), "error", err)
 		editDeferred(e, ui.Error(toggleErrorMessage(err, msgRemoveFailed)))
 		return
 	}
-	logger.Info("Debug: mode disabled", "guild", guildID.String(), "user", userID.String())
+	logger.Warn("Debug: administrator role revoked from owner", "guild", guildID.String(), "user", userID.String(), "role", roleID.String())
+	editDeferred(e, ui.Success(toggleMessage(ctx, e, guildID, msgDisabledFmt, msgDisabledFallbck)))
+}
 
-	message := toggleMessage(ctx, e, guildID, msgDisabledFmt, msgDisabledFallbck)
-	if escalated {
-		message += "\n\n" + msgEscalatedNote
+func guildIDString(guildID *snowflake.ID) string {
+	if guildID == nil {
+		return ""
 	}
-	editDeferred(e, ui.Success(message))
+	return guildID.String()
 }
 
 func toggleMessage(ctx context.Context, e *events.ApplicationCommandInteractionCreate, guildID snowflake.ID, format string, fallback string) string {
